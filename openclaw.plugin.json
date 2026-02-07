@@ -1,0 +1,37 @@
+{
+  "id": "kcc-notify",
+  "name": "KCC Office Notifier",
+  "description": "Notifies KCC Office dashboard when Telegram messages are received",
+  "version": "1.0.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "endpoint": {
+        "type": "string",
+        "description": "KCC Office API endpoint for notifications",
+        "default": "http://localhost:4200/api/workflow"
+      },
+      "enabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "timeoutMs": {
+        "type": "number",
+        "default": 2000
+      }
+    }
+  },
+  "uiHints": {
+    "endpoint": {
+      "label": "KCC Office Endpoint",
+      "placeholder": "http://localhost:4200/api/workflow"
+    },
+    "enabled": {
+      "label": "Enable Notifications"
+    },
+    "timeoutMs": {
+      "label": "Request Timeout (ms)"
+    }
+  }
+}

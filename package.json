@@ -1,0 +1,22 @@
+{
+  "name": "@kcc/openclaw-kcc-notify",
+  "version": "1.0.0",
+  "description": "OpenClaw plugin to notify KCC Office dashboard when messages are received",
+  "type": "module",
+  "main": "index.ts",
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wickedapp/openclaw-kcc-notify.git"
+  },
+  "keywords": [
+    "openclaw",
+    "plugin",
+    "kcc-office",
+    "telegram"
+  ],
+  "author": "KCC IT Solution",
+  "license": "MIT"
+}
