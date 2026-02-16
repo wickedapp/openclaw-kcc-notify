@@ -1,16 +1,21 @@
 {
   "id": "kcc-notify",
   "name": "KCC Office Notifier",
-  "description": "Notifies KCC Office dashboard when Telegram messages are received",
-  "version": "1.0.0",
+  "description": "Pushes incoming Boss messages and bot replies to KCC Office dashboard via message_received and message_sent hooks",
+  "version": "1.1.0",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
       "endpoint": {
         "type": "string",
-        "description": "KCC Office API endpoint for notifications",
+        "description": "KCC Office workflow API endpoint",
         "default": "http://localhost:4200/api/workflow"
+      },
+      "messagesEndpoint": {
+        "type": "string",
+        "description": "KCC Office messages API endpoint",
+        "default": "http://localhost:4200/api/messages"
       },
       "enabled": {
         "type": "boolean",
@@ -24,8 +29,12 @@
   },
   "uiHints": {
     "endpoint": {
-      "label": "KCC Office Endpoint",
+      "label": "Workflow Endpoint",
       "placeholder": "http://localhost:4200/api/workflow"
+    },
+    "messagesEndpoint": {
+      "label": "Messages Endpoint",
+      "placeholder": "http://localhost:4200/api/messages"
     },
     "enabled": {
       "label": "Enable Notifications"

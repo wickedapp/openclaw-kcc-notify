@@ -1,5 +1,5 @@
 {
-  "name": "@kcc/openclaw-kcc-notify",
+  "name": "kcc-notify",
   "version": "1.0.0",
   "description": "OpenClaw plugin to notify KCC Office dashboard when messages are received",
   "type": "module",
