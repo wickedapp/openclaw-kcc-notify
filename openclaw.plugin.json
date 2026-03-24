@@ -1,21 +1,31 @@
 {
   "id": "kcc-notify",
-  "name": "KCC Office Notifier",
-  "description": "Pushes incoming Boss messages and bot replies to KCC Office dashboard via message_received and message_sent hooks",
-  "version": "1.1.0",
+  "name": "OpenClaw Office Notifier",
+  "description": "Bridges OpenClaw agent events to the OpenClaw Office dashboard. Pushes messages, task lifecycle, and pipeline events via message_received/message_sent hooks.",
+  "version": "2.0.0",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
       "endpoint": {
         "type": "string",
-        "description": "KCC Office workflow API endpoint",
+        "description": "Office workflow API endpoint",
         "default": "http://localhost:4200/api/workflow"
       },
       "messagesEndpoint": {
         "type": "string",
-        "description": "KCC Office messages API endpoint",
+        "description": "Office messages API endpoint",
         "default": "http://localhost:4200/api/messages"
+      },
+      "ownerSenderIds": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Sender IDs that trigger dashboard activity. If empty, all messages are tracked (single-user mode).",
+        "default": []
+      },
+      "apiToken": {
+        "type": "string",
+        "description": "Bearer token for Office API authentication (optional, also reads KCC_OFFICE_API_TOKEN env var)"
       },
       "enabled": {
         "type": "boolean",
@@ -35,6 +45,13 @@
     "messagesEndpoint": {
       "label": "Messages Endpoint",
       "placeholder": "http://localhost:4200/api/messages"
+    },
+    "ownerSenderIds": {
+      "label": "Owner Sender IDs",
+      "placeholder": "Leave empty for single-user mode"
+    },
+    "apiToken": {
+      "label": "API Token (optional)"
     },
     "enabled": {
       "label": "Enable Notifications"

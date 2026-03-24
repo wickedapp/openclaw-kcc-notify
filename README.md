@@ -1,82 +1,118 @@
-# OpenClaw KCC Notify Plugin
+# OpenClaw Office Notify Plugin
 
-Notifies the KCC Office dashboard when Telegram messages are received by OpenClaw.
+The companion plugin for [OpenClaw Office](https://github.com/wickedapp/openclaw-office) — bridges OpenClaw agent events to the Office dashboard in real-time.
 
-## Architecture
+## What It Does
 
 ```
-Telegram ←→ OpenClaw (long polling)
-                 ↓
-           [This Plugin]
-                 ↓
-           KCC Office Dashboard (localhost:4200)
+User Message → OpenClaw Gateway
+                    ↓
+              [This Plugin]
+                    ↓ message_received → start_flow (creates request + task)
+                    ↓ message_sent → agent_complete (marks task done)
+                    ↓ after_tool_call → exec error notifications
+                    ↓ subagent_ended → pipeline continuation
+                    ↓
+              OpenClaw Office Dashboard (localhost:4200)
 ```
+
+When you send a message to your agent, this plugin notifies the Office dashboard so it can:
+- Show the request arriving (📥 animation)
+- Analyze and create a task (🔍 → 📋)
+- Show delegation to agents (📧 envelope animation)
+- Track work in progress (⚡)
+- Mark completion (✅)
 
 ## Installation
 
-### Via Git (Recommended)
+### 1. Clone the plugin
 
 ```bash
-# Clone to OpenClaw extensions directory
 git clone https://github.com/wickedapp/openclaw-kcc-notify.git ~/.openclaw/extensions/kcc-notify
 ```
 
-### Via Plugin Path
+### 2. Register in OpenClaw config
 
 Add to your `~/.openclaw/openclaw.json`:
 
 ```json
 {
   "plugins": {
+    "allow": ["kcc-notify"],
     "load": {
-      "paths": ["~/Projects/openclaw-kcc-notify"]
+      "paths": ["~/.openclaw/extensions/kcc-notify"]
     },
     "entries": {
       "kcc-notify": {
-        "enabled": true,
-        "config": {
-          "endpoint": "http://localhost:4200/api/workflow",
-          "timeoutMs": 2000
-        }
+        "enabled": true
       }
     }
   }
 }
 ```
 
+### 3. Restart OpenClaw
+
+```bash
+openclaw gateway restart
+```
+
 ## Configuration
+
+All options go in `plugins.entries.kcc-notify` in your OpenClaw config:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `endpoint` | string | `http://localhost:4200/api/workflow` | KCC Office API endpoint |
-| `enabled` | boolean | `true` | Enable/disable notifications |
+| `endpoint` | string | `http://localhost:4200/api/workflow` | Office workflow API endpoint |
+| `messagesEndpoint` | string | `http://localhost:4200/api/messages` | Office messages feed endpoint |
+| `ownerSenderIds` | string[] | `[]` | Sender IDs that trigger dashboard activity. Empty = all messages (single-user mode) |
+| `apiToken` | string | `""` | Bearer token for Office API auth (also reads `KCC_OFFICE_API_TOKEN` env var) |
+| `enabled` | boolean | `true` | Enable/disable the plugin |
 | `timeoutMs` | number | `2000` | Request timeout in milliseconds |
 
-## How It Works
+### Multi-user example
 
-### Current Implementation
+If your agent serves multiple users but you only want your messages on the dashboard:
 
-The plugin registers an HTTP handler at `/kcc-notify` that can be called to create "Received" entries in the KCC Office dashboard.
-
-```bash
-# Manual notification
-curl -X POST http://localhost:8787/kcc-notify \
-  -H "Content-Type: application/json" \
-  -d '{"content": "Test message", "from": "Boss", "messageId": 12345}'
+```json
+{
+  "kcc-notify": {
+    "enabled": true,
+    "ownerSenderIds": ["your-telegram-user-id"]
+  }
+}
 ```
 
-### Future Implementation
+### With API authentication
 
-When OpenClaw implements the `message:received` hook, this plugin will automatically notify KCC Office for every incoming Telegram message, providing instant "Received" animations on the dashboard.
+If your Office dashboard has API auth enabled:
+
+```json
+{
+  "kcc-notify": {
+    "enabled": true,
+    "apiToken": "your-kcc-api-token"
+  }
+}
+```
+
+## Hooks Registered
+
+| Hook | Purpose |
+|------|---------|
+| `message_received` | Creates dashboard request + task on incoming messages |
+| `message_sent` | Auto-completes active task when agent replies |
+| `after_tool_call` | Filters exec failures, notifies on real errors |
+| `subagent_delivery_target` | Suppresses direct sub-agent announces (orchestrator handles) |
+| `subagent_ended` | Advances pipeline stages when sub-agents complete |
 
 ## Non-Blocking Design
 
-All notifications to KCC Office are:
-- Fire-and-forget (don't block OpenClaw processing)
-- Have a 2-second timeout
-- Silently fail if KCC Office is down
+All notifications are fire-and-forget with configurable timeouts. If the Office dashboard is down, OpenClaw continues working normally.
 
-This ensures OpenClaw continues to work normally regardless of KCC Office status.
+## Automatic Noise Filtering
+
+System heartbeat checks, health polls, and `HEARTBEAT_OK` messages are automatically filtered — they never create tasks or dashboard entries.
 
 ## License
 

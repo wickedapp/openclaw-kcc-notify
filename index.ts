@@ -10,7 +10,46 @@
 const DEFAULT_WORKFLOW_ENDPOINT = 'http://localhost:4200/api/workflow';
 const DEFAULT_MESSAGES_ENDPOINT = 'http://localhost:4200/api/messages';
 const DEFAULT_TIMEOUT_MS = 2000;
-const BOSS_SENDER_IDS = ['167090545'];
+
+/** System noise patterns that should never create tasks or dashboard entries */
+const HEARTBEAT_NOISE = ['System heartbeat check', 'Periodic health check', 'Read HEARTBEAT.md', 'HEARTBEAT_OK'];
+
+/**
+ * Send an instant wake event to the main agent session via /hooks/wake.
+ * This replaces the old flag-file + heartbeat approach with immediate continuation.
+ */
+async function sendPipelineWake(text: string): Promise<boolean> {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    // Read hooks token from config
+    let hooksToken = '';
+    try {
+      const config = JSON.parse(fs.readFileSync(path.join(require('os').homedir(), '.openclaw', 'openclaw.json'), 'utf8'));
+      hooksToken = config?.hooks?.token || '';
+    } catch {}
+    if (!hooksToken) {
+      console.log('[kcc-notify] No hooks token found, cannot send wake');
+      return false;
+    }
+    const gatewayPort = 18789;
+    const resp = await fetch(`http://127.0.0.1:${gatewayPort}/hooks/wake`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${hooksToken}`,
+      },
+      body: JSON.stringify({ text, mode: 'now' }),
+      signal: AbortSignal.timeout(5000),
+    });
+    const ok = resp.ok;
+    console.log(`[kcc-notify] Wake sent (${ok ? 'ok' : resp.status}): ${text.slice(0, 80)}`);
+    return ok;
+  } catch (err: any) {
+    console.log(`[kcc-notify] Failed to send wake: ${err?.message || err}`);
+    return false;
+  }
+}
 
 // ── Exec failure filter logic ──
 
@@ -105,15 +144,21 @@ function isHarmlessExecMessage(content: string): boolean {
 async function postJson(
   url: string,
   body: Record<string, unknown>,
-  timeoutMs: number = DEFAULT_TIMEOUT_MS
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  bearerToken?: string
 ): Promise<boolean> {
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (bearerToken) {
+      headers['Authorization'] = `Bearer ${bearerToken}`;
+    }
+
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(body),
       signal: controller.signal,
     });
@@ -134,6 +179,39 @@ export default function kccNotifyPlugin(api: any) {
   const enabled = config.enabled !== false;
   const timeoutMs = config.timeoutMs || DEFAULT_TIMEOUT_MS;
 
+  // Owner sender IDs: messages from these senders trigger start_flow
+  // If not configured, ALL messages are treated as owner messages (single-user default)
+  const ownerSenderIds: string[] = Array.isArray(config.ownerSenderIds)
+    ? config.ownerSenderIds.map(String)
+    : [];
+  const isOwner = (senderId: string): boolean => {
+    if (ownerSenderIds.length === 0) return true; // No filter = all messages are from owner
+    return ownerSenderIds.includes(String(senderId));
+  };
+
+  // Load API token: env var → config → .env.local fallback
+  let apiToken = process.env.KCC_OFFICE_API_TOKEN || process.env.KCC_API_TOKEN || config.apiToken || '';
+  if (!apiToken) {
+    try {
+      const fs = require('fs');
+      // Try to find .env.local in the office directory (derive from workflow endpoint)
+      const officeUrl = new URL(workflowEndpoint);
+      const officePort = officeUrl.port || '4200';
+      // Common locations for the office .env.local
+      const paths = [
+        require('path').join(process.cwd(), '.env.local'),
+        require('os').homedir() + '/clawd/kcc-office/.env.local',
+      ];
+      for (const envPath of paths) {
+        try {
+          const envContent = fs.readFileSync(envPath, 'utf8');
+          const match = envContent.match(/KCC_API_TOKEN=(.+)/);
+          if (match) { apiToken = match[1].trim(); break; }
+        } catch {}
+      }
+    } catch {}
+  }
+
   if (!enabled) {
     console.log('[kcc-notify] Plugin disabled');
     return;
@@ -144,12 +222,21 @@ export default function kccNotifyPlugin(api: any) {
   console.log('[kcc-notify]   messages:', messagesEndpoint);
 
   // ── message_received: Boss messages → workflow + messages feed ──
-  api.registerHook('message_received', async (event: any) => {
+  api.on('message_received', async (event: any) => {
     const senderId = event?.metadata?.senderId || '';
     const content = event?.content || '';
     const messageId = event?.metadata?.messageId;
     const senderName = event?.metadata?.senderName || 'Unknown';
-    const isBoss = BOSS_SENDER_IDS.includes(String(senderId));
+    const isBoss = isOwner(senderId);
+
+    console.log(`[kcc-notify] message_received fired: senderId=${senderId} isBoss=${isBoss} content=${(content || '').slice(0, 60)}`);
+
+    // Filter system heartbeat/health-check noise — never push to dashboard
+    const HEARTBEAT_NOISE = ['System heartbeat check', 'Periodic health check', 'Read HEARTBEAT.md', 'HEARTBEAT_OK'];
+    if (HEARTBEAT_NOISE.some(p => content.includes(p))) {
+      console.log(`[kcc-notify] Filtered heartbeat noise: ${content.slice(0, 40)}`);
+      return;
+    }
 
     // Push to messages feed (all received messages from Boss)
     if (isBoss && content) {
@@ -158,7 +245,7 @@ export default function kccNotifyPlugin(api: any) {
         message: content,
         from: 'Boss',
         type: 'received',
-      }, timeoutMs);
+      }, timeoutMs, apiToken);
     }
 
     // Call start_flow for Boss messages (existing behavior)
@@ -170,7 +257,7 @@ export default function kccNotifyPlugin(api: any) {
         from: senderName,
         agent: 'wickedman',
         messageId: messageId ? Number(messageId) : undefined,
-      }, timeoutMs);
+      }, timeoutMs, apiToken);
     }
   }, {
     name: 'kcc-message-received',
@@ -178,7 +265,7 @@ export default function kccNotifyPlugin(api: any) {
   });
 
   // ── message_sent: bot replies → messages feed + auto agent_complete ──
-  api.registerHook('message_sent', async (event: any) => {
+  api.on('message_sent', async (event: any) => {
     const content = event?.content || event?.text || '';
     if (!content) return;
 
@@ -190,7 +277,7 @@ export default function kccNotifyPlugin(api: any) {
 
     // Only push messages sent to Boss (check recipient)
     const recipientId = event?.metadata?.recipientId || event?.metadata?.chatId || '';
-    const isToBoss = BOSS_SENDER_IDS.includes(String(recipientId));
+    const isToBoss = isOwner(recipientId);
 
     if (isToBoss) {
       console.log(`[kcc-notify] Bot reply → messages feed: ${content.slice(0, 60)}`);
@@ -198,16 +285,15 @@ export default function kccNotifyPlugin(api: any) {
         message: content,
         from: 'WickedMan',
         type: 'sent',
-      }, timeoutMs);
+      }, timeoutMs, apiToken);
 
       // Auto-complete any active task when we send a reply to Boss
-      // This ensures tasks don't get stuck as in_progress
       console.log(`[kcc-notify] Bot reply → agent_complete`);
       void postJson(workflowEndpoint, {
         action: 'agent_complete',
         agent: 'wickedman',
         result: typeof content === 'string' ? content.slice(0, 200) : 'Task completed',
-      }, timeoutMs);
+      }, timeoutMs, apiToken);
     }
   }, {
     name: 'kcc-message-sent',
@@ -215,7 +301,7 @@ export default function kccNotifyPlugin(api: any) {
   });
 
   // ── after_tool_call: filter exec failures, notify only on real problems ──
-  api.registerHook('after_tool_call', async (event: any) => {
+  api.on('after_tool_call', async (event: any) => {
     // Only care about exec tool calls
     const toolName = event?.toolName || event?.name || '';
     if (toolName !== 'exec') return;
@@ -242,15 +328,166 @@ export default function kccNotifyPlugin(api: any) {
       message: `⚠️ Exec failure (exit ${exitCode}): ${command.slice(0, 150)}`,
       from: 'System',
       type: 'exec_error',
-    }, timeoutMs);
+    }, timeoutMs, apiToken);
   }, {
     name: 'kcc-exec-filter',
     description: 'Filter harmless exec failures, notify only on real problems',
   });
 
-  // ── HTTP handler for manual notifications ──
-  api.registerHttpHandler({
-    method: 'POST',
+  // ── subagent_delivery_target: suppress direct announce to chat ──
+  // Return null to prevent delivery target resolution, letting orchestrator handle summary
+  api.on('subagent_delivery_target', async (event: any, ctx: any) => {
+    const childSessionKey = event?.childSessionKey || ctx?.childSessionKey || '';
+    const requesterSessionKey = event?.requesterSessionKey || ctx?.requesterSessionKey || '';
+    
+    console.log(`[kcc-notify] subagent_delivery_target: child=${childSessionKey}, requester=${requesterSessionKey}`);
+    
+    // Suppress direct announce to chat — let orchestrator handle summary
+    // Return null to prevent delivery target resolution
+    return null;
+  }, {
+    name: 'kcc-suppress-announce',
+    description: 'Suppress sub-agent direct announce to chat, orchestrator handles summary',
+  });
+
+  // ── subagent_ended: pipeline continuation via DB (single source of truth) ──
+  api.on('subagent_ended', async (event: any, ctx: any) => {
+    try {
+      console.log(`[kcc-notify] subagent_ended FIRED`);
+
+      const childSessionKey = event?.childSessionKey || event?.sessionKey || event?.targetSessionKey || ctx?.childSessionKey || '';
+      const requesterSessionKey = event?.requesterSessionKey || event?.parentSessionKey || ctx?.requesterSessionKey || '';
+
+      if (!childSessionKey || !requesterSessionKey) {
+        console.log(`[kcc-notify] subagent_ended: missing session keys, skipping`);
+        return;
+      }
+
+      // Extract agent ID from child session key (e.g. "agent:py:subagent:uuid" → "py")
+      const sessionParts = childSessionKey.split(':');
+      const agentId = sessionParts.length >= 2 ? sessionParts[1] : '';
+      if (!agentId) return;
+
+      // ── 1. Query KCC Office DB for active pipeline task involving this agent ──
+      let pipelineTask: any = null;
+      try {
+        const url = `${workflowEndpoint.replace('/api/workflow', '')}/api/workflow?type=pipeline-task&agent=${agentId}`;
+        const resp = await fetch(url, {
+          headers: apiToken ? { 'Authorization': `Bearer ${apiToken}` } : {},
+          signal: AbortSignal.timeout(3000),
+        });
+        if (resp.ok) {
+          const data = await resp.json() as any;
+          pipelineTask = data?.task;
+        }
+      } catch (err: any) {
+        console.log(`[kcc-notify] Failed to query pipeline task: ${err?.message || err}`);
+      }
+
+      if (!pipelineTask) {
+        console.log(`[kcc-notify] No active pipeline task for agent ${agentId}, skipping`);
+        return;
+      }
+
+      const taskId = pipelineTask.id;
+      const ps = pipelineTask.pipelineState;
+      const currentStage = ps?.stages?.[ps?.currentStage];
+
+      if (!currentStage || currentStage.status !== 'active') {
+        console.log(`[kcc-notify] Pipeline task ${taskId}: no active stage, skipping`);
+        return;
+      }
+
+      console.log(`[kcc-notify] Pipeline match: agent=${agentId}, taskId=${taskId}, stage=${currentStage.name}`);
+
+      // ── 2. Fetch sub-agent's last message for QA verdict detection ──
+      let firstLine = 'completed';
+      let qaVerdict: string | undefined = undefined;
+
+      const fs = require('fs');
+      const path = require('path');
+      let gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN || '';
+      if (!gatewayToken) {
+        try {
+          const config = JSON.parse(fs.readFileSync(path.join(require('os').homedir(), '.openclaw', 'openclaw.json'), 'utf8'));
+          gatewayToken = config?.gateway?.auth?.token || '';
+        } catch {}
+      }
+
+      try {
+        const historyUrl = `http://127.0.0.1:18789/api/sessions/${encodeURIComponent(childSessionKey)}/history?limit=1`;
+        const histResp = await fetch(historyUrl, {
+          headers: gatewayToken ? { 'Authorization': `Bearer ${gatewayToken}` } : {},
+          signal: AbortSignal.timeout(3000),
+        });
+        if (histResp.ok) {
+          const histData = await histResp.json() as any;
+          const messages = Array.isArray(histData) ? histData : histData?.messages || [];
+          if (messages.length > 0) {
+            const msg = messages[messages.length - 1];
+            const content = typeof msg?.content === 'string' ? msg.content
+              : typeof msg?.text === 'string' ? msg.text : '';
+            firstLine = content.split('\n')[0]?.trim() || 'completed';
+          }
+        }
+      } catch (err: any) {
+        console.log(`[kcc-notify] Failed to fetch session history: ${err?.message || err}`);
+      }
+
+      // Detect QA verdict if this is a QA stage
+      if (currentStage.name === 'hawk_qa' || currentStage.name === 'vigil_review' || currentStage.name === 'florence_review') {
+        if (/QA_PASS/i.test(firstLine)) qaVerdict = 'QA_PASS';
+        else if (/QA_FAIL/i.test(firstLine)) qaVerdict = 'QA_FAIL';
+        // If no explicit verdict, leave undefined — API will just advance
+      }
+
+      // ── 3. Call advance_pipeline API — single source of truth ──
+      let advanceResult: any = null;
+      try {
+        const resp = await fetch(workflowEndpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(apiToken ? { 'Authorization': `Bearer ${apiToken}` } : {}),
+          },
+          body: JSON.stringify({
+            action: 'advance_pipeline',
+            taskId,
+            agent: agentId,
+            result: firstLine.slice(0, 200),
+            qaVerdict,
+          }),
+          signal: AbortSignal.timeout(5000),
+        });
+        if (resp.ok) {
+          advanceResult = await resp.json() as any;
+          console.log(`[kcc-notify] advance_pipeline: nextAction=${advanceResult.nextAction}, nextAgent=${advanceResult.nextAgent}, stage=${advanceResult.stage}`);
+        } else {
+          console.log(`[kcc-notify] advance_pipeline failed: ${resp.status}`);
+        }
+      } catch (err: any) {
+        console.log(`[kcc-notify] advance_pipeline error: ${err?.message || err}`);
+      }
+
+      if (!advanceResult?.success || advanceResult.nextAction === 'none') {
+        console.log(`[kcc-notify] No pipeline action needed`);
+        return;
+      }
+
+      // ── 4. Send wake event with structured pipeline instruction ──
+      const wakeText = `[Pipeline] taskId=${taskId} action=${advanceResult.nextAction} agent=${advanceResult.nextAgent || 'none'} stage=${advanceResult.stage} childSession=${childSessionKey}`;
+      void sendPipelineWake(wakeText);
+
+    } catch (err: any) {
+      console.log(`[kcc-notify] subagent_ended hook ERROR: ${err?.stack || err?.message || err}`);
+    }
+  }, {
+    name: 'kcc-pipeline-continuation',
+    description: 'Pipeline continuation via DB single source of truth',
+  });
+
+  // ── HTTP route for manual notifications ──
+  api.registerHttpRoute({
     path: '/kcc-notify',
     async handler(req: any) {
       const body = await req.json();
@@ -269,7 +506,7 @@ export default function kccNotifyPlugin(api: any) {
         from,
         agent: 'wickedman',
         messageId: messageId ? Number(messageId) : undefined,
-      }, timeoutMs);
+      }, timeoutMs, apiToken);
 
       return new Response(JSON.stringify({ success }), {
         status: success ? 200 : 502,
