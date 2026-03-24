@@ -315,10 +315,27 @@ export default function kccNotifyPlugin(api: any) {
     description: 'Push bot replies to KCC Office messages feed + auto-complete tasks',
   });
 
-  // ── after_tool_call: filter exec failures, notify only on real problems ──
+  // ── after_tool_call: detect delegation + filter exec failures ──
   api.on('after_tool_call', async (event: any) => {
-    // Only care about exec tool calls
     const toolName = event?.toolName || event?.name || '';
+
+    // Detect sessions_spawn → notify dashboard about delegation
+    if (toolName === 'sessions_spawn') {
+      const args = event?.params || event?.input || {};
+      const delegatedTo = args?.agentId || 'agent';
+      const taskDetail = args?.task || 'Delegated task';
+      console.log(`[kcc-notify] Delegation detected → ${delegatedTo}: ${taskDetail.slice(0, 60)}`);
+      void postJson(workflowEndpoint, {
+        action: 'start_flow',
+        content: taskDetail.slice(0, 200),
+        from: 'Boss',
+        agent: 'wickedman',
+        delegatedTo,
+      }, timeoutMs, apiToken);
+      return;
+    }
+
+    // Only care about exec tool calls from here
     if (toolName !== 'exec') return;
 
     const result = event?.result || event?.output || {};
@@ -347,6 +364,29 @@ export default function kccNotifyPlugin(api: any) {
   }, {
     name: 'kcc-exec-filter',
     description: 'Filter harmless exec failures, notify only on real problems',
+  });
+
+  // ── subagent_spawned: detect delegation and notify dashboard ──
+  api.on('subagent_spawned', async (event: any) => {
+    const childSessionKey = event?.childSessionKey || '';
+    const task = event?.task || event?.prompt || '';
+    // Extract agent ID from session key: "agent:py:subagent:uuid" → "py"
+    const parts = childSessionKey.split(':');
+    const agentId = parts.length >= 2 ? parts[1] : '';
+    
+    if (agentId && task) {
+      console.log(`[kcc-notify] Delegation detected → ${agentId}: ${task.slice(0, 60)}`);
+      void postJson(workflowEndpoint, {
+        action: 'start_flow',
+        content: task.slice(0, 200),
+        from: 'Boss',
+        agent: 'wickedman',
+        delegatedTo: agentId,
+      }, timeoutMs, apiToken);
+    }
+  }, {
+    name: 'kcc-delegation-detect',
+    description: 'Detect sub-agent spawn and notify dashboard about delegation',
   });
 
   // ── subagent_delivery_target: suppress direct announce to chat ──
