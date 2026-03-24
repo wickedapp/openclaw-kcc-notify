@@ -1,3 +1,5 @@
+> ⚠️ **This repo has been renamed to [openclaw-office-notify-plugin](https://github.com/wickedapp/openclaw-office-notify-plugin).** Please use the new repo.
+
 # OpenClaw Office Notify Plugin
 
 The companion plugin for [OpenClaw Office](https://github.com/wickedapp/openclaw-office) — bridges OpenClaw agent events to the Office dashboard in real-time.
