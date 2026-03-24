@@ -179,13 +179,28 @@ export default function kccNotifyPlugin(api: any) {
   const enabled = config.enabled !== false;
   const timeoutMs = config.timeoutMs || DEFAULT_TIMEOUT_MS;
 
-  // Owner sender IDs: messages from these senders trigger start_flow
-  // If not configured, ALL messages are treated as owner messages (single-user default)
-  const ownerSenderIds: string[] = Array.isArray(config.ownerSenderIds)
-    ? config.ownerSenderIds.map(String)
-    : [];
+  // Owner sender IDs: read from OpenClaw's channels.*.allowFrom config
+  // This reuses the existing authorized senders — no extra config needed
+  let ownerSenderIds: string[] = [];
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const configPath = path.join(require('os').homedir(), '.openclaw', 'openclaw.json');
+    const ocConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const channels = ocConfig?.channels || {};
+    for (const ch of Object.values(channels) as any[]) {
+      if (Array.isArray(ch?.allowFrom)) {
+        ownerSenderIds.push(...ch.allowFrom.map(String));
+      }
+    }
+    // Deduplicate
+    ownerSenderIds = [...new Set(ownerSenderIds)];
+    if (ownerSenderIds.length > 0) {
+      console.log(`[kcc-notify] Owner sender IDs (from allowFrom): ${ownerSenderIds.join(', ')}`);
+    }
+  } catch {}
   const isOwner = (senderId: string): boolean => {
-    if (ownerSenderIds.length === 0) return true; // No filter = all messages are from owner
+    if (ownerSenderIds.length === 0) return true; // No allowFrom = all messages are from owner
     return ownerSenderIds.includes(String(senderId));
   };
 

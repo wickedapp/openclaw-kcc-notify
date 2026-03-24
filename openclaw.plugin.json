@@ -17,12 +17,6 @@
         "description": "Office messages API endpoint",
         "default": "http://localhost:4200/api/messages"
       },
-      "ownerSenderIds": {
-        "type": "array",
-        "items": { "type": "string" },
-        "description": "Sender IDs that trigger dashboard activity. If empty, all messages are tracked (single-user mode).",
-        "default": []
-      },
       "apiToken": {
         "type": "string",
         "description": "Bearer token for Office API authentication (optional, also reads KCC_OFFICE_API_TOKEN env var)"
@@ -45,10 +39,6 @@
     "messagesEndpoint": {
       "label": "Messages Endpoint",
       "placeholder": "http://localhost:4200/api/messages"
-    },
-    "ownerSenderIds": {
-      "label": "Owner Sender IDs",
-      "placeholder": "Leave empty for single-user mode"
     },
     "apiToken": {
       "label": "API Token (optional)"

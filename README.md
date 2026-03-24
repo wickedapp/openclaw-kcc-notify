@@ -65,23 +65,13 @@ All options go in `plugins.entries.kcc-notify` in your OpenClaw config:
 |--------|------|---------|-------------|
 | `endpoint` | string | `http://localhost:4200/api/workflow` | Office workflow API endpoint |
 | `messagesEndpoint` | string | `http://localhost:4200/api/messages` | Office messages feed endpoint |
-| `ownerSenderIds` | string[] | `[]` | Sender IDs that trigger dashboard activity. Empty = all messages (single-user mode) |
 | `apiToken` | string | `""` | Bearer token for Office API auth (also reads `KCC_OFFICE_API_TOKEN` env var) |
 | `enabled` | boolean | `true` | Enable/disable the plugin |
 | `timeoutMs` | number | `2000` | Request timeout in milliseconds |
 
-### Multi-user example
+### Owner Detection
 
-If your agent serves multiple users but you only want your messages on the dashboard:
-
-```json
-{
-  "kcc-notify": {
-    "enabled": true,
-    "ownerSenderIds": ["your-telegram-user-id"]
-  }
-}
-```
+The plugin automatically reads `channels.*.allowFrom` from your OpenClaw config to determine which sender IDs are "owners". Only owner messages create dashboard entries. If no `allowFrom` is configured, all messages are tracked (single-user default).
 
 ### With API authentication
 
